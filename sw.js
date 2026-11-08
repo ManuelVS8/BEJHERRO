@@ -5,7 +5,7 @@
    - index.html se pide primero a la red (si hay), así siempre recibes la última versión.
    - Solo borra SUS cachés: manuelvs8.github.io es compartido con tus otras apps. */
 const PREFIX = 'bejherro-music-';
-const VERSION = PREFIX + 'v2.0.0';
+const VERSION = PREFIX + 'v2.1.0';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './icon-maskable-512.png'];
 
 self.addEventListener('install', e => {

@@ -615,7 +615,7 @@ body.yt-on #view{padding-bottom:280px}
 
 <script>
 (()=>{'use strict';
-const VER='2.0.0';
+const VER='2.1.0';
 /* Pega aquí tu Client ID de Jamendo (gratis en devportal.jamendo.com) y lo tendrán también tus amigos sin configurar nada. */
 const JAMENDO_ID='';
 /* Pega aquí tu clave de la YouTube Data API v3 (restringida a manuelvs8.github.io). 100 búsquedas/día por clave. */
@@ -1306,34 +1306,74 @@ function ytTrack(id,sn,dur){
  const th=sn.thumbnails||{};const cover=(th.medium||th.high||th.default||{}).url||('https://i.ytimg.com/vi/'+id+'/mqdefault.jpg');
  return{id:'Y:'+id,kind:'web',src:'yt',yt:id,title,artist:artist||ch||'YouTube',album:'YouTube',cover,page:'https://www.youtube.com/watch?v='+id,dur:dur||0};
 }
+/* ---- Cuota diaria de YouTube (100 búsquedas = 10.000 unidades; se reinicia a las 00:00 hora del Pacífico) ---- */
+const YTQ_K='bejherro-music.ytq';
+const ptDay=()=>new Date().toLocaleDateString('en-CA',{timeZone:'America/Los_Angeles'});
+function ytQ(){try{const o=JSON.parse(localStorage.getItem(YTQ_K))||{};return o.d===ptDay()?o:{d:ptDay(),n:0,out:0}}catch(e){return{d:ptDay(),n:0,out:0}}}
+function ytQSet(o){try{localStorage.setItem(YTQ_K,JSON.stringify(o))}catch(e){}}
+const ytQUsed=()=>ytQ().n, ytQOut=()=>!!ytQ().out;
+/* ---- Caché compartida opcional (Firestore por REST, sin librerías). Vacío = desactivada ---- */
+const FB_PROJECT='', FB_APIKEY='';
+const fbOn=()=>!!(FB_PROJECT&&FB_APIKEY);
+const fbDoc=q=>'q'+Array.from(norm(q)).reduce((h,c)=>(h*31+c.charCodeAt(0))>>>0,7).toString(36)+norm(q).replace(/[^a-z0-9]/g,'').slice(0,40);
+async function fbGet(q){if(!fbOn())return null;try{const r=await fetchT('https://firestore.googleapis.com/v1/projects/'+FB_PROJECT+'/databases/(default)/documents/ytcache/'+fbDoc(q)+'?key='+FB_APIKEY);if(!r.ok)return null;const j=await r.json();const f=j.fields||{};const at=+(f.at&&f.at.integerValue||0);if(!at||Date.now()-at>7*864e5)return null;return JSON.parse(f.items.stringValue)}catch(e){return null}}
+function fbPut(q,items){if(!fbOn())return;try{fetch('https://firestore.googleapis.com/v1/projects/'+FB_PROJECT+'/databases/(default)/documents/ytcache/'+fbDoc(q)+'?key='+FB_APIKEY,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({fields:{q:{stringValue:norm(q).slice(0,80)},at:{integerValue:String(Date.now())},items:{stringValue:JSON.stringify(items)}}})}).catch(()=>{})}catch(e){}}
+/* ---- Alias de grupos habituales ---- */
+const ALIAS={soad:'system of a down',acdc:'ac dc',gnr:'guns n roses',"guns and roses":'guns n roses',rhcp:'red hot chili peppers',rtm:'rage against the machine',ratm:'rage against the machine',nin:'nine inch nails',mcr:'my chemical romance',lp:'linkin park',"green day":'green day',metallica:'metallica',slipknot:'slipknot',tool:'tool band',"los suaves":'los suaves',erk:'extremoduro',extremo:'extremoduro',fito:'fito y fitipaldis',rosendo:'rosendo',"x japan":'x japan',pj:'pearl jam',sabbath:'black sabbath',zep:'led zeppelin',"led zep":'led zeppelin'};
+const expandQ=q=>{const n=norm(q);return ALIAS[n]||q};
+/* ---- Relevancia y filtro anti-ruido ---- */
+const NOISE=/\b(cover|karaoke|reaction|reacci[oó]n|tutorial|lesson|how to play|slowed|reverb|sped up|nightcore|8d|bass boosted|instrumental version|tribute|parody|remix|mashup|fan ?made|guitar lesson|drum cover|piano cover|full album|1 hour|10 hours|compilation|best of)\b/i;
+function relScore(t,q){const a=expandQ(q);return Math.max(relScore1(t,q),a===q?-99:relScore1(t,a))}
+function relScore1(t,q){
+ const n=norm(q),w=n.split(' ').filter(Boolean);if(!w.length)return 0;
+ const ti=norm(t.title),ar=norm(t.artist),all=ti+' '+ar;let s=0;
+ const hit=w.filter(x=>all.includes(x)).length;s+=hit/w.length*40;
+ if(ar===n)s+=40;else if(ar.startsWith(n))s+=30;else if(ar.includes(n))s+=20;
+ if(ti===n)s+=45;else if(ti.startsWith(n))s+=25;else if(ti.includes(n))s+=12;
+ if(t.kind==='local'||t.kind==='file')s+=35+Math.min(10,plays(t.id)/3);
+ if(t.src==='yt'){
+  if(!NOISE.test(q)&&(NOISE.test(t.title)||NOISE.test(t.rawTitle||'')))s-=120;
+  if(t.official)s+=18;
+  if(t.dur&&(t.dur<60||t.dur>900))s-=25;
+  s+=Math.max(0,8-(t.rank||0)*0.5);
+ }
+ if(t.src==='jam'||t.src==='ia')s-=4;
+ return s;
+}
 async function ytSearch(q){
- const hit=ytCached(q);if(hit)return hit;if(!ytKey())throw named('ytnokey');
+ const hit=ytCached(q);if(hit)return hit;
+ const sh=await fbGet(q);if(sh&&sh.length){ytCachePut(q,sh);return sh}
+ if(!ytKey())throw named('ytnokey');
+ if(ytQOut())throw named('ytquota');
  const base='https://www.googleapis.com/youtube/v3/',k='&key='+encodeURIComponent(ytKey());
- const get=async u=>{const r=await fetchT(u);const j=await r.json().catch(()=>({}));if(!r.ok||j.error)throw ytErr(j.error||{code:r.status});return j};
- let j=await get(base+'search?part=snippet&type=video&videoEmbeddable=true&videoCategoryId=10&maxResults=25&q='+encodeURIComponent(q)+k);
+ const get=async u=>{const r=await fetchT(u);const j=await r.json().catch(()=>({}));if(!r.ok||j.error){const e=ytErr(j.error||{code:r.status});if(e.name==='ytquota'){const o=ytQ();o.out=1;ytQSet(o)}throw e}return j};
+ const sq=expandQ(q);
+ let j=await get(base+'search?part=snippet&type=video&videoEmbeddable=true&videoCategoryId=10&maxResults=25&q='+encodeURIComponent(sq)+k);
+ {const o=ytQ();o.n++;ytQSet(o)}
  let items=(j.items||[]).filter(i=>i.id&&i.id.videoId);
- if(items.length<3){const j2=await get(base+'search?part=snippet&type=video&videoEmbeddable=true&maxResults=25&q='+encodeURIComponent(q)+k);items=(j2.items||[]).filter(i=>i.id&&i.id.videoId)}
+ if(items.length<3){const j2=await get(base+'search?part=snippet&type=video&videoEmbeddable=true&maxResults=25&q='+encodeURIComponent(sq)+k);{const o=ytQ();o.n++;ytQSet(o)}items=(j2.items||[]).filter(i=>i.id&&i.id.videoId)}
  const durs={};if(items.length){try{const v=await get(base+'videos?part=contentDetails&id='+items.map(i=>i.id.videoId).join(',')+k);(v.items||[]).forEach(x=>durs[x.id]=isoDur(x.contentDetails&&x.contentDetails.duration))}catch(e){}}
- const out=items.map(i=>ytTrack(i.id.videoId,i.snippet||{},durs[i.id.videoId]));ytCachePut(q,out);return out;
+ const out=items.map((i,ix)=>{const t=ytTrack(i.id.videoId,i.snippet||{},durs[i.id.videoId]);const ch=decodeEnt((i.snippet||{}).channelTitle);t.rawTitle=decodeEnt((i.snippet||{}).title);t.official=/- Topic$|VEVO$/i.test(ch)||norm(ch)===norm(t.artist);t.rank=ix;return t});
+ ytCachePut(q,out);fbPut(q,out);return out;
 }
 const YTS={q:'',st:'',items:[],err:''};
 async function ytRun(q){
  q=String(q||'').trim();if(q.length<2)return;if(YTS.q===q&&(YTS.st==='loading'||YTS.st==='done'))return;
- const c=ytCached(q);if(c){Object.assign(YTS,{q,st:'done',items:c,err:''});paintYT();return}
+ const c=ytCached(q);if(c){Object.assign(YTS,{q,st:'done',items:c,err:''});if(SF==='yt')paintYT();else searchResults();return}
  if(!ytKey()){Object.assign(YTS,{q,st:'err',items:[],err:'ytnokey'});paintYT();return}
  if(!online()){Object.assign(YTS,{q,st:'err',items:[],err:'offline'});paintYT();return}
  Object.assign(YTS,{q,st:'loading',items:[],err:''});paintYT();
  try{const r=await ytSearch(q);if(YTS.q!==q)return;Object.assign(YTS,{st:'done',items:r})}catch(e){if(YTS.q!==q)return;Object.assign(YTS,{st:'err',err:e.name})}
- if(cur().v==='search')paintYT();
+ if(cur().v==='search'){if(SF==='yt')paintYT();else searchResults()}
 }
 function paintYT(){
  const el=$('#syt');if(!el)return;const q=(cur().a||'').trim();if(q.length<2){el.innerHTML='';return}
- const full=SF==='yt';let h=`<div class="sec"><div><h2>YouTube</h2><small>Vídeos oficiales · el vídeo se muestra mientras suena</small></div></div>`;
+ const full=SF==='yt';let h=full?`<div class="sec"><div><h2>YouTube</h2><small>Vídeos oficiales · el vídeo se muestra mientras suena</small></div></div>`:'';
  const c=YTS.q===q?YTS:(ytCached(q)?{st:'done',items:ytCached(q)}:{st:''});
- if(c.st==='done'){h+=c.items.length?rows('s_yt',full?c.items:c.items.slice(0,5),{ctx:{t:'yt',n:'YouTube: '+q}})+(!full&&c.items.length>5?`<button class="link" data-a="sf" data-x="yt" style="margin-top:6px">Ver los ${c.items.length} vídeos</button>`:''):'<p class="note">Sin resultados en YouTube.</p>'}
+ if(c.st==='done'){if(full)h+=c.items.length?rows('s_yt',c.items,{ctx:{t:'yt',n:'YouTube: '+q}}):'<p class="note">Sin resultados en YouTube.</p>';else{el.innerHTML=c.items.length?`<p class="note">Incluye ${plural(c.items.length,'vídeo','vídeos')} de YouTube. <button class="link" data-a="sf" data-x="yt">Ver solo YouTube</button></p>`:'<p class="note">Sin resultados en YouTube.</p>';return}}
  else if(c.st==='loading')h+=`<div class="spin" style="margin:18px auto"></div>`;
- else if(c.st==='err'){const m={ytnokey:'Para buscar en YouTube necesitas una clave gratuita de Google. Ponla en <button class="link" data-a="go" data-v="settings">Ajustes</button>.',ytquota:'Se han agotado las búsquedas de YouTube de hoy (100 al día). Se renuevan a las 9:00 (hora de España). Las búsquedas ya hechas siguen disponibles.',ytkey:'Google no acepta la clave de YouTube. Revísala en <button class="link" data-a="go" data-v="settings">Ajustes</button>.',ytforbidden:'La clave de YouTube no permite usarse desde esta web. Revisa sus restricciones en Google Cloud.',offline:'Sin conexión.'}[YTS.err]||'No se pudo buscar en YouTube. Inténtalo de nuevo.';h+=`<p class="note">${m}</p>`}
- else h+=`<button class="btn sm" data-a="ytsearch">${ic('yt')}Buscar «${esc(q)}» en YouTube</button>`;
+ else if(c.st==='err'){const m={ytnokey:'Para buscar en YouTube necesitas una clave gratuita de Google. Ponla en <button class="link" data-a="go" data-v="settings">Ajustes</button>.',ytquota:'Hoy se han agotado las búsquedas nuevas de YouTube. Vuelven mañana a las 9:00 (hora de España). Las búsquedas ya hechas siguen disponibles.',ytkey:'Google no acepta la clave de YouTube. Revísala en <button class="link" data-a="go" data-v="settings">Ajustes</button>.',ytforbidden:'La clave de YouTube no permite usarse desde esta web. Revisa sus restricciones en Google Cloud.',offline:'Sin conexión.'}[YTS.err]||'No se pudo buscar en YouTube. Inténtalo de nuevo.';h+=`<p class="note">${m}</p>`}
+ else h+=`<button class="btn sm" data-a="ytsearch" style="margin-top:10px">${ic('yt')}Pulsa Intro o aquí para incluir YouTube</button>`;
  el.innerHTML=h;markRows();
 }
 
@@ -1552,7 +1592,6 @@ function banners(){
  if(mf.length)h+=`<div class="banner"><div class="bi">${ic('folder')}</div><div><b>No encuentro «${esc(mf[0].name)}»</b><small>Puede que la hayas movido o renombrado. Vuelve a añadirla.</small></div><button class="btn ac sm" data-a="addfolder">Añadir</button></div>`;
  const tf=FOLDERS.filter(f=>f.temp&&!f.files);
  if(tf.length)h+=`<div class="banner info"><div class="bi">${ic('folder')}</div><div><b>Vuelve a elegir «${esc(tf[0].name)}»</b><small>Tu navegador no puede recordar carpetas entre sesiones. Con Chrome o Edge no tendrás que hacerlo.</small></div><button class="btn sm" data-a="pickdir">Elegir</button></div>`;
- if(DEFER&&!STANDALONE()&&!S.dismiss.install&&LIB.length)h+=`<div class="banner info"><div class="bi">${ic('download')}</div><div><b>Instala BEJHERRO</b><small>Se abre como una app, recuerda tus carpetas sin pedir permiso y funciona sin conexión con tu música local.</small></div><button class="btn sm pri" data-a="install">Instalar</button><button class="ib x" data-a="dismiss" data-x="install" aria-label="Cerrar">${ic('close')}</button></div>`;
  return h;
 }
 
@@ -1744,7 +1783,7 @@ const V={
   let h=`<div class="page set"><h1 class="ptitle">Ajustes</h1>`;
   h+=`<div class="sgroup"><h3>Carpetas de música</h3>`+FOLDERS.map(F=>`<div class="srow">${folderTile('th')}<div><b>${esc(F.name)} ${folderStatus(F)}</b><small>${plural(LIB.filter(t=>t.fid===F.id).length,'canción','canciones')}${F.lastScan?' · actualizada '+dayLabel(F.lastScan).toLowerCase():''}</small></div>${F.state==='perm'?`<button class="btn sm ac" data-a="reconnect">Permitir</button>`:F.temp&&!F.files?`<button class="btn sm" data-a="pickdir">Elegir</button>`:`<button class="ib" data-a="rescanf" data-x="${esc(F.id)}" title="Buscar cambios" aria-label="Buscar cambios">${ic('refresh')}</button>`}<button class="ib" data-a="rmfolder" data-x="${esc(F.id)}" title="Quitar" aria-label="Quitar">${ic('trash')}</button></div>`).join('')+
    `<div class="srow"><div><b>Añadir carpeta</b><small>${HAS_FS?'BEJHERRO la recordará. Puedes añadir varias (por ejemplo, Música y Descargas).':'Tu navegador no puede recordar carpetas: tendrás que elegirla en cada sesión. Usa Chrome o Edge para evitarlo.'}</small></div><button class="btn sm pri" data-a="addfolder">${ic('folderPlus')}Añadir</button></div>${HAS_FS?'':`<div class="srow"><div><b>Añadir archivos sueltos</b><small>Útil en móviles que no permiten elegir carpetas.</small></div><button class="btn sm" data-a="pickfiles">Elegir</button></div>`}</div>`;
-  h+=`<div class="sgroup"><h3>YouTube</h3><div class="srow"><div><b>Clave de YouTube ${ytKey()?'<span class="st ok">Activa</span>':'<span class="st warn">Sin configurar</span>'}${YT_KEY&&!S.set.ytkey?' <small style="display:inline">(clave de la app)</small>':''}</b><small>Necesaria solo para <b>buscar</b> en YouTube. Google da 100 búsquedas al día por clave; cada búsqueda se guarda 7 días para no gastar. Los vídeos de YouTube no suenan con la pantalla bloqueada (norma de YouTube).</small><input class="tin" id="ytk" value="${esc(S.set.ytkey||'')}" placeholder="${YT_KEY?'Usando la clave de la app (opcional: pon la tuya)':'Pega aquí tu clave de API'}" autocomplete="off" spellcheck="false"></div><button class="btn sm" data-a="saveyt">Guardar</button></div></div>`;
+  h+=`<div class="sgroup"><h3>YouTube</h3><div class="srow"><div><b>Clave de YouTube ${ytKey()?'<span class="st ok">Activa</span>':'<span class="st warn">Sin configurar</span>'}${YT_KEY&&!S.set.ytkey?' <small style="display:inline">(clave de la app)</small>':''}</b><small>Necesaria solo para <b>buscar</b> en YouTube. Hoy: <b>${Math.min(100,ytQUsed())}/100</b> búsquedas gastadas entre todos los usuarios de este dispositivo${fbOn()?' (la caché compartida ahorra más)':''}. Cada búsqueda se guarda 7 días. Los vídeos de YouTube no suenan con la pantalla bloqueada (norma de YouTube).</small><input class="tin" id="ytk" value="${esc(S.set.ytkey||'')}" placeholder="${YT_KEY?'Usando la clave de la app (opcional: pon la tuya)':'Pega aquí tu clave de API'}" autocomplete="off" spellcheck="false"></div><button class="btn sm" data-a="saveyt">Guardar</button></div></div>`;
   h+=`<div class="sgroup"><h3>Música online</h3><div class="srow"><div><b>Mostrar música libre online</b><small>Internet Archive: dominio público, Creative Commons y directos autorizados.</small></div><input type="checkbox" class="sw" data-ch="online" ${S.set.online?'checked':''} aria-label="Mostrar música online"></div>
    <div class="srow"><div><b>Jamendo ${jamKey()?'<span class="st ok">Activo</span>':''}${JAMENDO_ID&&!S.set.jamendo?' <small style="display:inline">(clave de la app)</small>':''}</b><small>Crea una cuenta gratuita en <a href="https://devportal.jamendo.com" target="_blank" rel="noopener">devportal.jamendo.com</a>, registra una app y pega aquí tu «Client ID». Uso personal y no comercial.</small><input class="tin" id="jamk" value="${esc(S.set.jamendo)}" placeholder="Client ID de Jamendo" autocomplete="off" spellcheck="false"></div><button class="btn sm" data-a="savejam">Guardar</button></div></div>`;
   h+=`<div class="sgroup"><h3>App</h3><div class="srow"><div><b>Instalar BEJHERRO</b><small id="instmsg">${STANDALONE()?'Ya estás usando la app instalada.':DEFER?'Ventana propia, acceso a tus carpetas sin volver a pedir permiso y arranque sin conexión.':/iphone|ipad/i.test(navigator.userAgent)?'En iPhone/iPad: botón Compartir → «Añadir a pantalla de inicio».':'Abre el menú del navegador y elige «Instalar BEJHERRO» o «Añadir a pantalla de inicio».'}</small></div>${DEFER&&!STANDALONE()?`<button class="btn sm pri" data-a="install">${ic('download')}Instalar</button>`:STANDALONE()?'<span class="st ok">Instalada</span>':''}</div>
@@ -1764,7 +1803,7 @@ function actsBar(v,x,o={}){
 }
 const notFound=t=>({h:`<div class="page">${emptyState('info',t,'Puede que se haya eliminado o que la carpeta ya no esté conectada.',`<button class="btn" data-a="go" data-v="home">Ir a Inicio</button>`)}</div>`,title:''});
 const libEmpty=()=>emptyState('folder','Aún no hay música aquí',HAS_FS?'Añade la carpeta donde guardas tu música y BEJHERRO la organizará sola.':'Elige la carpeta donde guardas tu música.',`<button class="btn ac" data-a="addfolder">${ic('folderPlus')}Añadir carpeta</button>`);
-function welcome(){return`<div class="welcome"><img class="logo w-logo" src="icon-512.png" alt="BEJHERRO"><h1>Tu música.<br>Sin suscripciones.</h1><p>Reúne la música de tu ordenador y miles de discos libres y legales en un reproductor rápido, bonito y solo tuyo.</p><div class="btns"><button class="btn ac" data-a="addfolder">${ic('folderPlus')}Añadir mi música</button><button class="btn" data-a="go" data-v="discover">${ic('globe')}Explorar música libre</button></div>${HAS_FS?'':`<p class="w-note">Tu navegador no puede recordar carpetas. Para la mejor experiencia usa Chrome o Edge (ordenador, Chromebook o Android).${isMobile()?' <button class="link" data-a="pickfiles">O elige archivos sueltos</button>':''}</p>`}<div class="w-feat"><div>${ic('library')}<b>Se organiza sola</b><small>Lee las etiquetas y portadas de tus archivos y lo ordena por artistas, álbumes y géneros.</small></div><div>${ic('heart')}<b>Como las grandes</b><small>Listas, favoritos, mezclas diarias, cola, aleatorio, historial, temporizador y estadísticas.</small></div><div>${ic('lock')}<b>Privada y legal</b><small>Tu música no sale de tu dispositivo. Lo online es música libre de fuentes oficiales.</small></div></div></div>`}
+function welcome(){return`<div class="welcome"><img class="logo w-logo" src="icon-512.png" alt="BEJHERRO"><h1>Tu música.<br>Sin suscripciones.</h1><p>Reúne la música de tu ordenador y miles de discos libres y legales en un reproductor rápido, bonito y solo tuyo.</p><div class="btns"><button class="btn ac" data-a="addfolder">${ic('folderPlus')}Añadir mi música</button><button class="btn" data-a="go" data-v="discover">${ic('globe')}Explorar música libre</button></div></div>`}
 
 /* ---- Carga de estanterías online ---- */
 async function radioFind(q){
@@ -1800,6 +1839,12 @@ function searchLocal(q){
  const pls=Object.values(S.pls).filter(p=>m(norm(p.name)));
  return{songs,arts,albs,pls};
 }
+function mergedSongs(q,R){
+ const yt=(YTS.q===q&&YTS.st==='done')?YTS.items:(ytCached(q)||[]);
+ const all=[...R.songs,...yt,...((ONS.q===q&&ONS.st==='done')?ONS.jam:[])];
+ const seen=new Set();
+ return all.map(t=>({t,s:relScore(t,q)})).sort((a,b)=>b.s-a.s).filter(x=>x.s>-15).map(x=>x.t).filter(t=>{const k=norm(t.title)+'|'+norm(t.artist);if(seen.has(k))return false;seen.add(k);return true});
+}
 function searchResults(){
  const box=$('#sres');if(!box)return;const q=(cur().a||'').trim();CTX={};
  if(!q){
@@ -1809,20 +1854,20 @@ function searchResults(){
   if(S.set.online)h+=`<div class="sec"><h2>Explorar música libre</h2></div><div class="gtiles">${OG.map(g=>`<button class="gt" style="--h:${hue(g.k+'x')}" data-a="go" data-v="discover" data-x="${g.k}">${esc(g.n)}<small>Online · gratis</small></button>`).join('')}</div>`;
   box.innerHTML=h;return;
  }
- const R=searchLocal(q);onlineSearch(q);
+ const R=searchLocal(q);onlineSearch(q);const M=mergedSongs(q,R);
  const chips=[['all','Todo'],['yt','YouTube'],['songs','Canciones'],['arts','Artistas'],['albs','Álbumes'],['pls','Listas'],['radio','Radio'],['online','Música libre']];
  let h=`<div class="chips">${chips.map(([k,n])=>`<button class="chip${SF===k?' on':''}" data-a="sf" data-x="${k}">${n}</button>`).join('')}</div>`;
- const none=!R.songs.length&&!R.arts.length&&!R.albs.length&&!R.pls.length;
+ const none=!M.length&&!R.arts.length&&!R.albs.length&&!R.pls.length;
  if(SF==='all'){
   if(!none){let top='';const a=R.arts[0],s=R.songs[0],b=R.albs[0];const n=norm(q);
    if(a&&(a._n.startsWith(n)||!s))top=`<div class="topres" data-a="go" data-v="artist" data-x="${esc(a.key)}">${cov(artCover(a),'th round')}<b>${esc(a.name)}</b><small><i class="badge">Artista</i></small><button class="c-play" data-a="playx" data-v="artist" data-x="${esc(a.key)}" aria-label="Reproducir">${ic('play')}</button></div>`;
    else if(b&&norm(b.title).startsWith(n)&&!(s&&norm(s.title).startsWith(n)))top=`<div class="topres" data-a="go" data-v="album" data-x="${esc(b.ck)}">${cov(b.tracks[0],'th')}<b>${esc(b.title)}</b><small><i class="badge">Álbum</i>${esc(b.artist)}</small><button class="c-play" data-a="playx" data-v="album" data-x="${esc(b.ck)}" aria-label="Reproducir">${ic('play')}</button></div>`;
-   else if(s){CTX.s_top={list:[s],o:{ctx:{t:'search',n:'Búsqueda'}}};top=`<div class="topres" data-a="row" data-c="s_top" data-i="0">${cov(s,'th')}<b>${esc(s.title)}</b><small><i class="badge">Canción</i>${esc(s.artist)}</small><span class="c-play">${ic('play')}</span></div>`}
-   h+=`<div class="sgrid"><div><h2>Resultado principal</h2>${top}</div><div><h2>Canciones</h2>${rows('s_songs',R.songs.slice(0,4),{ctx:{t:'search',n:'Búsqueda: '+q}})}</div></div>`;
+   else if(M[0]){const s=M[0];CTX.s_top={list:[s],o:{ctx:{t:'search',n:'Búsqueda'}}};top=`<div class="topres" data-a="row" data-c="s_top" data-i="0">${cov(s,'th')}<b>${esc(s.title)}</b><small><i class="badge">${{yt:'YouTube',jam:'Jamendo',ia:'Archive'}[s.src]||'Canción'}</i>${esc(s.artist)}</small><span class="c-play">${ic('play')}</span></div>`}
+   h+=`<div class="sgrid"><div><h2>Resultado principal</h2>${top}</div><div><h2>Canciones</h2>${rows('s_songs',M.slice(0,6),{ctx:{t:'search',n:'Búsqueda: '+q}})}${M.length>6?`<button class="link" data-a="sf" data-x="songs" style="margin-top:6px">Ver las ${M.length} canciones</button>`:''}</div></div>`;
    h+=shelf('Artistas',R.arts.slice(0,12).map(artCard),null);h+=shelf('Álbumes',R.albs.slice(0,12).map(albCard),null);h+=shelf('Listas',R.pls.slice(0,12).map(plCard),null);
   }else h+=`<p class="note">No hay resultados en tu biblioteca para «${esc(q)}».</p>`;
   h+=`<div id="syt"></div><div id="sonline"></div>`;
- }else if(SF==='songs')h+=R.songs.length?thead()+rows('s_all',R.songs,{ctx:{t:'search',n:'Búsqueda: '+q}}):emptyState('search','Sin canciones','Prueba con otras palabras.');
+ }else if(SF==='songs')h+=M.length?thead()+rows('s_all',M,{ctx:{t:'search',n:'Búsqueda: '+q}}):emptyState('search','Sin canciones','Prueba con otras palabras.');
  else if(SF==='arts')h+=R.arts.length?`<div class="grid">${R.arts.map(artCard).join('')}</div>`:emptyState('user','Sin artistas','Prueba con otras palabras.');
  else if(SF==='albs')h+=R.albs.length?`<div class="grid">${R.albs.map(albCard).join('')}</div>`:emptyState('disc','Sin álbumes','Prueba con otras palabras.');
  else if(SF==='pls')h+=R.pls.length?`<div class="grid">${R.pls.map(plCard).join('')}</div>`:emptyState('note','Sin listas','Prueba con otras palabras.');
