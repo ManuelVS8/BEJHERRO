@@ -617,7 +617,7 @@ body.yt-on #view{padding-bottom:280px}
 (()=>{'use strict';
 const VER='2.1.0';
 /* Pega aquí tu Client ID de Jamendo (gratis en devportal.jamendo.com) y lo tendrán también tus amigos sin configurar nada. */
-const JAMENDO_ID='eeeaa2e1';
+const JAMENDO_ID='';
 /* Pega aquí tu clave de la YouTube Data API v3 (restringida a manuelvs8.github.io). 100 búsquedas/día por clave. */
 const YT_KEY='AIzaSyBIbYBpyFXF-Kt9STuVq4kR1_LRu8FZVq4';
 
@@ -1106,10 +1106,15 @@ async function iaItem(id){
   return{id,title,artist,year:(String(md.date||md.year||'').match(/\d{4}/)||[''])[0],cover,license:str1(md.licenseurl),desc:String(str1(md.description)).replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim().slice(0,280),tracks}})();
  NET.items.set(id,p);p.catch(()=>NET.items.delete(id));return p;
 }
-const jamKey=()=>S.set.jamendo||JAMENDO_ID;
+const jamKey=()=>''; /* Jamendo desactivado: no se usa */
+/* Jamendo: primero fetch; si el navegador lo bloquea (CORS), se usa JSONP (script), que Jamendo admite con callback= */
+function jamJSONP(url,ms=12000){return new Promise((res,rej)=>{const cb='__jam'+Math.random().toString(36).slice(2);const sc=document.createElement('script');let done=0;
+ const end=()=>{done=1;clearTimeout(t);delete window[cb];sc.remove()};const t=setTimeout(()=>{if(!done){end();rej(new Error('timeout'))}},ms);
+ window[cb]=d=>{if(done)return;end();res(d)};sc.onerror=()=>{if(done)return;end();rej(new Error('jsonp'))};sc.src=url+'&callback='+cb;document.head.appendChild(sc)})}
+async function jamGet(url){try{const r=await fetchT(url);return await r.json()}catch(e){return await jamJSONP(url)}}
 async function jam(params){
  if(!jamKey())return null;const key='jam|'+params;if(NET.q.has(key))return NET.q.get(key);
- const p=(async()=>{const r=await fetchT('https://api.jamendo.com/v3.0/tracks/?client_id='+encodeURIComponent(jamKey())+'&format=json&limit=30&audioformat=mp32&imagesize=300&'+params);const j=await r.json();if(j.headers&&j.headers.status==='failed')throw named('jamendo',j.headers.error_message);
+ const p=(async()=>{const j=await jamGet('https://api.jamendo.com/v3.0/tracks/?client_id='+encodeURIComponent(jamKey())+'&format=json&limit=30&audioformat=mp32&imagesize=300&'+params);if(j.headers&&j.headers.status==='failed')throw named('jamendo',j.headers.error_message);
   return(j.results||[]).filter(x=>x.audio).map(x=>({id:'W:jam:'+x.id,kind:'web',src:'jam',title:x.name,artist:x.artist_name,album:x.album_name||'',cover:x.album_image||x.image||'',url:x.audio,page:x.shareurl||('https://www.jamendo.com/track/'+x.id),dur:+x.duration||0,license:x.license_ccurl||''}))})();
  NET.q.set(key,p);p.catch(()=>NET.q.delete(key));return p;
 }
@@ -1661,7 +1666,6 @@ const V={
   if(!S.set.online)return{h:h+emptyState('globe','La música online está desactivada','Actívala en Ajustes si quieres descubrir música libre.',`<button class="btn" data-a="go" data-v="settings">Ir a Ajustes</button>`)+'</div>',title:'Descubrir'};
   if(!online())return{h:h+emptyState('wifiOff','Sin conexión','Conéctate a internet para descubrir música libre. Tu música local sigue funcionando.')+'</div>',title:'Descubrir'};
   h+=`<div class="chips">${OG.map(x=>`<button class="chip${x.k===g?' on':''}" data-a="${x.k===g?'go':'go'}" data-v="discover" data-x="${x.k}">${esc(x.n)}</button>`).join('')}</div>`;
-  if(!jamKey()&&!G&&!S.dismiss.jam)h+=`<div class="banner info"><div class="bi">${ic('note')}</div><div><b>Añade Jamendo (gratis)</b><small>Cientos de miles de canciones Creative Commons de artistas independientes. Solo necesitas una clave gratuita.</small></div><button class="btn sm" data-a="go" data-v="settings">Configurar</button><button class="ib x" data-a="dismiss" data-x="jam" aria-label="Cerrar">${ic('close')}</button></div>`;
   const skc='<div class="sk-card"><div class="skel"></div><div class="skel"></div></div>'.repeat(6);
   const sec=(title,key,sub)=>`<div class="sec"><div><h2>${esc(title)}</h2>${sub?`<small>${esc(sub)}</small>`:''}</div></div><div data-load="${esc(key)}"><div class="shelf">${skc}</div></div>`;
   if(G){if(jamKey())h+=sec('Canciones','jam:tags='+G.jam,'Jamendo · Creative Commons');h+=sec('Álbumes','ia:s:'+G.ia,'Internet Archive');}
@@ -1784,8 +1788,7 @@ const V={
   h+=`<div class="sgroup"><h3>Carpetas de música</h3>`+FOLDERS.map(F=>`<div class="srow">${folderTile('th')}<div><b>${esc(F.name)} ${folderStatus(F)}</b><small>${plural(LIB.filter(t=>t.fid===F.id).length,'canción','canciones')}${F.lastScan?' · actualizada '+dayLabel(F.lastScan).toLowerCase():''}</small></div>${F.state==='perm'?`<button class="btn sm ac" data-a="reconnect">Permitir</button>`:F.temp&&!F.files?`<button class="btn sm" data-a="pickdir">Elegir</button>`:`<button class="ib" data-a="rescanf" data-x="${esc(F.id)}" title="Buscar cambios" aria-label="Buscar cambios">${ic('refresh')}</button>`}<button class="ib" data-a="rmfolder" data-x="${esc(F.id)}" title="Quitar" aria-label="Quitar">${ic('trash')}</button></div>`).join('')+
    `<div class="srow"><div><b>Añadir carpeta</b><small>${HAS_FS?'BEJHERRO la recordará. Puedes añadir varias (por ejemplo, Música y Descargas).':'Tu navegador no puede recordar carpetas: tendrás que elegirla en cada sesión. Usa Chrome o Edge para evitarlo.'}</small></div><button class="btn sm pri" data-a="addfolder">${ic('folderPlus')}Añadir</button></div>${HAS_FS?'':`<div class="srow"><div><b>Añadir archivos sueltos</b><small>Útil en móviles que no permiten elegir carpetas.</small></div><button class="btn sm" data-a="pickfiles">Elegir</button></div>`}</div>`;
   h+=`<div class="sgroup"><h3>YouTube</h3><div class="srow"><div><b>Clave de YouTube ${ytKey()?'<span class="st ok">Activa</span>':'<span class="st warn">Sin configurar</span>'}${YT_KEY&&!S.set.ytkey?' <small style="display:inline">(clave de la app)</small>':''}</b><small>Necesaria solo para <b>buscar</b> en YouTube. Hoy: <b>${Math.min(100,ytQUsed())}/100</b> búsquedas gastadas entre todos los usuarios de este dispositivo${fbOn()?' (la caché compartida ahorra más)':''}. Cada búsqueda se guarda 7 días. Los vídeos de YouTube no suenan con la pantalla bloqueada (norma de YouTube).</small><input class="tin" id="ytk" value="${esc(S.set.ytkey||'')}" placeholder="${YT_KEY?'Usando la clave de la app (opcional: pon la tuya)':'Pega aquí tu clave de API'}" autocomplete="off" spellcheck="false"></div><button class="btn sm" data-a="saveyt">Guardar</button></div></div>`;
-  h+=`<div class="sgroup"><h3>Música online</h3><div class="srow"><div><b>Mostrar música libre online</b><small>Internet Archive: dominio público, Creative Commons y directos autorizados.</small></div><input type="checkbox" class="sw" data-ch="online" ${S.set.online?'checked':''} aria-label="Mostrar música online"></div>
-   <div class="srow"><div><b>Jamendo ${jamKey()?'<span class="st ok">Activo</span>':''}${JAMENDO_ID&&!S.set.jamendo?' <small style="display:inline">(clave de la app)</small>':''}</b><small>Crea una cuenta gratuita en <a href="https://devportal.jamendo.com" target="_blank" rel="noopener">devportal.jamendo.com</a>, registra una app y pega aquí tu «Client ID». Uso personal y no comercial.</small><input class="tin" id="jamk" value="${esc(S.set.jamendo)}" placeholder="Client ID de Jamendo" autocomplete="off" spellcheck="false"></div><button class="btn sm" data-a="savejam">Guardar</button></div></div>`;
+  h+=`<div class="sgroup"><h3>Música online</h3><div class="srow"><div><b>Mostrar música libre online</b><small>Internet Archive: dominio público, Creative Commons y directos autorizados.</small></div><input type="checkbox" class="sw" data-ch="online" ${S.set.online?'checked':''} aria-label="Mostrar música online"></div></div>`;
   h+=`<div class="sgroup"><h3>App</h3><div class="srow"><div><b>Instalar BEJHERRO</b><small id="instmsg">${STANDALONE()?'Ya estás usando la app instalada.':DEFER?'Ventana propia, acceso a tus carpetas sin volver a pedir permiso y arranque sin conexión.':/iphone|ipad/i.test(navigator.userAgent)?'En iPhone/iPad: botón Compartir → «Añadir a pantalla de inicio».':'Abre el menú del navegador y elige «Instalar BEJHERRO» o «Añadir a pantalla de inicio».'}</small></div>${DEFER&&!STANDALONE()?`<button class="btn sm pri" data-a="install">${ic('download')}Instalar</button>`:STANDALONE()?'<span class="st ok">Instalada</span>':''}</div>
    <div class="srow"><div><b>Almacenamiento</b><small id="stor">Calculando…</small></div></div>
    <div class="srow"><div><b>Atajos de teclado</b><small>Espacio: reproducir/pausa · ←/→: retroceder/avanzar 5 s · Mayús+←/→: anterior/siguiente · M: silenciar · L: me gusta · S: aleatorio · R: repetir · /: buscar</small></div></div></div>`;
@@ -1884,11 +1887,10 @@ function paintOnline(){
  if(ONS.q!==q||ONS.st==='loading'){el.innerHTML=h+`<div class="shelf">${'<div class="sk-card"><div class="skel"></div><div class="skel"></div></div>'.repeat(6)}</div>`;return}
  if(SF==='radio'){h=`<div class="sec"><h2>Emisoras de radio</h2></div>`;if(ONS.q!==q||ONS.st==='loading'){el.innerHTML=h+'<div class="spin"></div>';return}el.innerHTML=h+(ONS.radio&&ONS.radio.length?rows('s_radio',ONS.radio,{ctx:{t:'radio',n:'Radio'}}):'<p class="note">No hay emisoras con ese nombre.</p>');markRows();return}
  if(ONS.st==='error'){el.innerHTML=h+'<p class="note">No se pudo buscar online. Comprueba tu conexión.</p>';return}
- if(ONS.jam.length)h+=rows('s_jam',SF==='online'?ONS.jam:ONS.jam.slice(0,5),{ctx:{t:'jam',n:'Jamendo'}});
+ if(ONS.jam.length&&SF==='online')h+=rows('s_jam',ONS.jam,{ctx:{t:'jam',n:'Jamendo'}});
  if(ONS.ia.length)h+=SF==='online'?`<div class="grid" style="margin-top:16px">${ONS.ia.map(iaCard).join('')}</div>`:`<div class="shelf" style="margin-top:12px">${ONS.ia.slice(0,16).map(iaCard).join('')}</div>`;
  if(!ONS.jam.length&&!ONS.ia.length)h+=`<p class="note">Sin resultados de música libre para «${esc(q)}».</p>`;
  if(SF==='all'&&ONS.radio&&ONS.radio.length)h+=`<div class="sec"><h2>Emisoras de radio</h2></div>`+rows('s_radio',ONS.radio.slice(0,4),{ctx:{t:'radio',n:'Radio'}});
- if(!jamKey()&&SF==='online')h+=`<p class="note">Activa Jamendo en <button class="link" data-a="go" data-v="settings">Ajustes</button> para encontrar muchas más canciones.</p>`;
  el.innerHTML=h;markRows();
 }
 
