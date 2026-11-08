@@ -10,8 +10,8 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="manifest" href="manifest.webmanifest">
-<link rel="icon" type="image/png" href="icon-192.png">
-<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" type="image/png" href="icon-192.png?v=2">
+<link rel="apple-touch-icon" href="icon-192.png?v=2">
 <title>BEJHERRO</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
@@ -528,7 +528,7 @@ body.yt-on #view{padding-bottom:280px}
 <body>
 <div id="app">
  <aside id="side">
-  <div class="brand"><img class="logo" src="icon-192.png" alt="">BEJHERRO</div>
+  <div class="brand"><img class="logo" src="icon-192.png?v=2" alt="">BEJHERRO</div>
   <nav class="snav" id="snav"></nav>
   <div class="side-lib">
    <div class="side-h"><span>Tus listas</span><button class="ib" data-a="newpl" title="Crear lista" aria-label="Crear lista"></button></div>
@@ -1803,7 +1803,7 @@ function actsBar(v,x,o={}){
 }
 const notFound=t=>({h:`<div class="page">${emptyState('info',t,'Puede que se haya eliminado o que la carpeta ya no esté conectada.',`<button class="btn" data-a="go" data-v="home">Ir a Inicio</button>`)}</div>`,title:''});
 const libEmpty=()=>emptyState('folder','Aún no hay música aquí',HAS_FS?'Añade la carpeta donde guardas tu música y BEJHERRO la organizará sola.':'Elige la carpeta donde guardas tu música.',`<button class="btn ac" data-a="addfolder">${ic('folderPlus')}Añadir carpeta</button>`);
-function welcome(){return`<div class="welcome"><img class="logo w-logo" src="icon-512.png" alt="BEJHERRO"><h1>Tu música.<br>Sin suscripciones.</h1><p>Reúne la música de tu ordenador y miles de discos libres y legales en un reproductor rápido, bonito y solo tuyo.</p><div class="btns"><button class="btn ac" data-a="addfolder">${ic('folderPlus')}Añadir mi música</button><button class="btn" data-a="go" data-v="discover">${ic('globe')}Explorar música libre</button></div></div>`}
+function welcome(){return`<div class="welcome"><img class="logo w-logo" src="icon-512.png?v=2" alt="BEJHERRO"><h1>Tu música.<br>Sin suscripciones.</h1><p>Reúne la música de tu ordenador y miles de discos libres y legales en un reproductor rápido, bonito y solo tuyo.</p><div class="btns"><button class="btn ac" data-a="addfolder">${ic('folderPlus')}Añadir mi música</button><button class="btn" data-a="go" data-v="discover">${ic('globe')}Explorar música libre</button></div></div>`}
 
 /* ---- Carga de estanterías online ---- */
 async function radioFind(q){
